@@ -23,7 +23,7 @@
 
 	<groupId>com.github.mjeanroy</groupId>
 	<artifactId>exiftool-lib</artifactId>
-	<version>3.0.1-SNAPSHOT</version>
+	<version>3.0.1-BLUELIV</version>
 	<name>exiftool</name>
 	<description>Java Wrapper for ExifTool</description>
 	<packaging>jar</packaging>

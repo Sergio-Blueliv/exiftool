@@ -278,363 +278,365 @@ import static java.util.Objects.requireNonNull;
  */
 public class ExifTool implements AutoCloseable {
 
-	private static final Cleaner cleaner = CleanerFactory.createCleaner();
+  private static final String OPTIONS_CANNOT_BE_NULL = "Options cannot be null.";
 
-	/**
-	 * Internal Logger.
-	 * Will used slf4j, log4j or internal implementation.
-	 */
-	private static final Logger log = LoggerFactory.getLogger(ExifTool.class);
+  private static final Cleaner cleaner = CleanerFactory.createCleaner();
 
-	/**
-	 * Cache used to store {@code exiftool} version:
-	 *
-	 * <ul>
-	 *   <li>Key is the path to the {@code exiftool} executable</li>
-	 *   <li>Value is the associated version.</li>
-	 * </ul>
-	 */
-	private static final VersionCache cache = VersionCacheFactory.newCache();
+  /**
+   * Internal Logger.
+   * Will used slf4j, log4j or internal implementation.
+   */
+  private static final Logger log = LoggerFactory.getLogger(ExifTool.class);
 
-	/**
-	 * Command Executor.
-	 * This withExecutor will be used to execute exiftool process and commands.
-	 */
-	private final CommandExecutor executor;
+  /**
+   * Cache used to store {@code exiftool} version:
+   *
+   * <ul>
+   *   <li>Key is the path to the {@code exiftool} executable</li>
+   *   <li>Value is the associated version.</li>
+   * </ul>
+   */
+  private static final VersionCache cache = VersionCacheFactory.newCache();
 
-	/**
-	 * Exiftool Path.
-	 * Path is first read from `exiftool.withPath` system property,
-	 * otherwise `exiftool` must be globally available.
-	 */
-	private final String path;
+  /**
+   * Command Executor.
+   * This withExecutor will be used to execute exiftool process and commands.
+   */
+  private final CommandExecutor executor;
 
-	/**
-	 * This is the version detected on exiftool executable.
-	 * This version depends on executable given on instantiation.
-	 */
-	private final Version version;
+  /**
+   * Exiftool Path.
+   * Path is first read from `exiftool.withPath` system property,
+   * otherwise `exiftool` must be globally available.
+   */
+  private final String path;
 
-	/**
-	 * ExifTool execution strategy.
-	 * This strategy implement how exiftool is effectively used (as one-shot
-	 * process or with `stay_open` flag).
-	 */
-	private final ExecutionStrategy strategy;
+  /**
+   * This is the version detected on exiftool executable.
+   * This version depends on executable given on instantiation.
+   */
+  private final Version version;
 
-	/**
-	 * Create new ExifTool instance.
-	 * When exiftool is created, it will try to activate some features.
-	 * If feature is not available on this specific exiftool version, then
-	 * an it an {@link UnsupportedFeatureException} will be thrown.
-	 *
-	 * @param path ExifTool withPath.
-	 * @param executor Executor used to handle command line.
-	 * @param strategy Execution strategy.
-	 */
-	ExifTool(String path, CommandExecutor executor, ExecutionStrategy strategy) {
-		this.executor = requireNonNull(executor, "Executor should not be null");
-		this.path = notBlank(path, "ExifTool path should not be null");
-		this.strategy = requireNonNull(strategy, "Execution strategy should not be null");
-		this.version = cache.load(path, executor);
+  /**
+   * ExifTool execution strategy.
+   * This strategy implement how exiftool is effectively used (as one-shot
+   * process or with `stay_open` flag).
+   */
+  private final ExecutionStrategy strategy;
 
-		// Check if this instance may be used safely.
-		if (!strategy.isSupported(version)) {
-			throw new UnsupportedFeatureException(path, version);
-		}
+  /**
+   * Create new ExifTool instance.
+   * When exiftool is created, it will try to activate some features.
+   * If feature is not available on this specific exiftool version, then
+   * an it an {@link UnsupportedFeatureException} will be thrown.
+   *
+   * @param path ExifTool withPath.
+   * @param executor Executor used to handle command line.
+   * @param strategy Execution strategy.
+   */
+  ExifTool(String path, CommandExecutor executor, ExecutionStrategy strategy) {
+    this.executor = requireNonNull(executor, "Executor should not be null");
+    this.path = notBlank(path, "ExifTool path should not be null");
+    this.strategy = requireNonNull(strategy, "Execution strategy should not be null");
+    this.version = cache.load(path, executor);
 
-		cleaner.register(this, new FinalizerTask(strategy));
-	}
+    // Check if this instance may be used safely.
+    if (!strategy.isSupported(version)) {
+      throw new UnsupportedFeatureException(path, version);
+    }
 
-	/**
-	 * This method should be used to clean previous execution.
-	 *
-	 * <br>
-	 *
-	 * <strong>NOTE: Calling this method prevent this instance of {@link ExifTool} from being re-used.</strong>
-	 *
-	 * @throws Exception If an error occurred while closing exiftool client.
-	 */
-	@Override
-	public void close() throws Exception {
-		strategy.shutdown();
-	}
+    cleaner.register(this, new FinalizerTask(strategy));
+  }
 
-	/**
-	 * Stop `ExifTool` client.
-	 *
-	 * <strong>NOTE</strong>: Calling this method does not preclude this
-	 * instance of {@link ExifTool} from being re-used, it merely disposes of
-	 * the native and internal resources until the next call to
-	 * {@code getImageMeta} causes them to be re-instantiated.
-	 *
-	 * @throws Exception If an error occurred while stopping exiftool client.
-	 */
-	public void stop() throws Exception {
-		strategy.close();
-	}
+  /**
+   * This method should be used to clean previous execution.
+   *
+   * <br>
+   *
+   * <strong>NOTE: Calling this method prevent this instance of {@link ExifTool} from being re-used.</strong>
+   *
+   * @throws Exception If an error occurred while closing exiftool client.
+   */
+  @Override
+  public void close() throws Exception {
+    strategy.shutdown();
+  }
 
-	/**
-	 * This method is used to determine if there is currently a running
-	 * ExifTool process associated with this class.
-	 *
-	 * <br>
-	 *
-	 * Any dependent processes and streams can be shutdown using
-	 * {@link #close()} and this class will automatically re-create them on the
-	 * next call to {@link #getImageMeta} if necessary.
-	 *
-	 * @return {@code true} if there is an external ExifTool process is still
-	 * running otherwise returns {@code false}.
-	 */
-	public boolean isRunning() {
-		return strategy.isRunning();
-	}
+  /**
+   * Stop `ExifTool` client.
+   *
+   * <strong>NOTE</strong>: Calling this method does not preclude this
+   * instance of {@link ExifTool} from being re-used, it merely disposes of
+   * the native and internal resources until the next call to
+   * {@code getImageMeta} causes them to be re-instantiated.
+   *
+   * @throws Exception If an error occurred while stopping exiftool client.
+   */
+  public void stop() throws Exception {
+    strategy.close();
+  }
 
-	/**
-	 * Exiftool version pointed by this instance.
-	 *
-	 * @return Version.
-	 */
-	public Version getVersion() {
-		return version;
-	}
+  /**
+   * This method is used to determine if there is currently a running
+   * ExifTool process associated with this class.
+   *
+   * <br>
+   *
+   * Any dependent processes and streams can be shutdown using
+   * {@link #close()} and this class will automatically re-create them on the
+   * next call to {@link #getImageMeta} if necessary.
+   *
+   * @return {@code true} if there is an external ExifTool process is still
+   * running otherwise returns {@code false}.
+   */
+  public boolean isRunning() {
+    return strategy.isRunning();
+  }
 
-	/**
-	 * Parse image metadata for all tags.
-	 * Output format is numeric.
-	 *
-	 * @param image Image.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image) throws IOException {
-		return getImageMeta(image, StandardFormat.NUMERIC);
-	}
+  /**
+   * Exiftool version pointed by this instance.
+   *
+   * @return Version.
+   */
+  public Version getVersion() {
+    return version;
+  }
 
-	/**
-	 * Parse image metadata for all tags.
-	 *
-	 * @param image Image.
-	 * @param format Output format.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image, Format format) throws IOException {
-		StandardOptions options = StandardOptions.builder().withFormat(format).build();
-		return getImageMeta(image, options);
-	}
+  /**
+   * Parse image metadata for all tags.
+   * Output format is numeric.
+   *
+   * @param image Image.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image) throws IOException {
+    return getImageMeta(image, StandardFormat.NUMERIC);
+  }
 
-	/**
-	 * Parse image metadata for all tags.
-	 *
-	 * @param image Image.
-	 * @param options ExifTool options.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image, ExifToolOptions options) throws IOException {
-		log.debug("Querying all tags from image: {}", image);
-		UnspecifiedTag all = new UnspecifiedTag("All");
-		Set<UnspecifiedTag> tags = singleton(all);
-		return getImageMeta(image, tags, options, new AllTagHandler());
-	}
+  /**
+   * Parse image metadata for all tags.
+   *
+   * @param image Image.
+   * @param format Output format.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image, Format format) throws IOException {
+    StandardOptions options = StandardOptions.builder().withFormat(format).build();
+    return getImageMeta(image, options);
+  }
 
-	/**
-	 * Parse image metadata.
-	 * Output format is numeric.
-	 *
-	 * @param image Image.
-	 * @param tags List of tags to extract.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image, Collection<? extends Tag> tags) throws IOException {
-		return getImageMeta(image, StandardFormat.NUMERIC, tags);
-	}
+  /**
+   * Parse image metadata for all tags.
+   *
+   * @param image Image.
+   * @param options ExifTool options.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image, ExifToolOptions options) throws IOException {
+    log.debug("Querying all tags from image: {}", image);
+    UnspecifiedTag all = new UnspecifiedTag("All");
+    Set<UnspecifiedTag> tags = singleton(all);
+    return getImageMeta(image, tags, options, new AllTagHandler());
+  }
 
-	/**
-	 * Parse image metadata.
-	 *
-	 * @param image Image.
-	 * @param format Output format.
-	 * @param tags List of tags to extract.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image, Format format, Collection<? extends Tag> tags) throws IOException {
-		requireNonNull(format, "Format cannot be null.");
-		StandardOptions options = StandardOptions.builder().withFormat(format).build();
-		return getImageMeta(image, options, tags);
-	}
+  /**
+   * Parse image metadata.
+   * Output format is numeric.
+   *
+   * @param image Image.
+   * @param tags List of tags to extract.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image, Collection<? extends Tag> tags) throws IOException {
+    return getImageMeta(image, StandardFormat.NUMERIC, tags);
+  }
 
-	/**
-	 * Parse image metadata.
-	 *
-	 * @param image Image.
-	 * @param options ExifTool options.
-	 * @param tags List of tags to extract.
-	 * @return Pair of tag associated with the value.
-	 * @throws IOException If something bad happen during I/O operations.
-	 * @throws NullPointerException If one parameter is null.
-	 * @throws IllegalArgumentException If list of tag is empty.
-	 * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
-	 */
-	public Map<Tag, String> getImageMeta(File image, ExifToolOptions options, Collection<? extends Tag> tags) throws IOException {
-		requireNonNull(options, "Options cannot be null.");
-		notEmpty(tags, "Tags cannot be null and must contain 1 or more Tag to query the image for.");
+  /**
+   * Parse image metadata.
+   *
+   * @param image Image.
+   * @param format Output format.
+   * @param tags List of tags to extract.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image, Format format, Collection<? extends Tag> tags) throws IOException {
+    requireNonNull(format, "Format cannot be null.");
+    StandardOptions options = StandardOptions.builder().withFormat(format).build();
+    return getImageMeta(image, options, tags);
+  }
 
-		log.debug("Querying {} tags from image: {}", tags.size(), image);
+  /**
+   * Parse image metadata.
+   *
+   * @param image Image.
+   * @param options ExifTool options.
+   * @param tags List of tags to extract.
+   * @return Pair of tag associated with the value.
+   * @throws IOException If something bad happen during I/O operations.
+   * @throws NullPointerException If one parameter is null.
+   * @throws IllegalArgumentException If list of tag is empty.
+   * @throws com.thebuzzmedia.exiftool.exceptions.UnreadableFileException If image cannot be read.
+   */
+  public Map<Tag, String> getImageMeta(File image, ExifToolOptions options, Collection<? extends Tag> tags) throws IOException {
+    requireNonNull(options, OPTIONS_CANNOT_BE_NULL);
+    notEmpty(tags, "Tags cannot be null and must contain 1 or more Tag to query the image for.");
 
-		// Create a result map big enough to hold results for each of the tags
-		// and avoid collisions while inserting.
-		StandardTagHandler tagHandler = new StandardTagHandler(tags);
+    log.debug("Querying {} tags from image: {}", tags.size(), image);
 
-		return getImageMeta(image, tags, options, tagHandler);
-	}
+    // Create a result map big enough to hold results for each of the tags
+    // and avoid collisions while inserting.
+    StandardTagHandler tagHandler = new StandardTagHandler(tags);
 
-	private Map<Tag, String> getImageMeta(File image, Collection<? extends Tag> tags, ExifToolOptions options, TagHandler tagHandler) throws IOException {
-		requireNonNull(image, "Image cannot be null and must be a valid stream of image data.");
-		requireNonNull(options, "Options cannot be null.");
-		isReadable(image, String.format("Unable to read the given image [%s], ensure that the image exists at the given withPath and that the executing Java process has permissions to read it.", image));
+    return getImageMeta(image, tags, options, tagHandler);
+  }
 
-		// Build list of exiftool arguments.
-		List<String> args = toArguments(image, tags, options);
+  private Map<Tag, String> getImageMeta(File image, Collection<? extends Tag> tags, ExifToolOptions options, TagHandler tagHandler) throws IOException {
+    requireNonNull(image, "Image cannot be null and must be a valid stream of image data.");
+    requireNonNull(options, OPTIONS_CANNOT_BE_NULL);
+    isReadable(image, String.format("Unable to read the given image [%s], ensure that the image exists at the given withPath and that the executing Java process has permissions to read it.", image));
 
-		// Execute ExifTool command
-		strategy.execute(executor, path, args, tagHandler);
+    // Build list of exiftool arguments.
+    List<String> args = toArguments(image, tags, options);
 
-		// Add some debugging log
-		log.debug("Image Meta Processed [queried {}, found {} values]", tagHandler.size(), tagHandler.size());
+    // Execute ExifTool command
+    strategy.execute(executor, path, args, tagHandler);
 
-		return tagHandler.getTags();
-	}
+    // Add some debugging log
+    log.debug("Image Meta Processed [queried {}, found {} values]", tagHandler.size(), tagHandler.size());
 
-	/**
-	 * Write image metadata.
-	 * Default format is numeric.
-	 *
-	 * @param image Image.
-	 * @param tags Tags to write.
-	 * @throws IOException If an error occurs during write operation.
-	 */
-	public void setImageMeta(File image, Map<? extends Tag, String> tags) throws IOException {
-		setImageMeta(image, StandardFormat.NUMERIC, tags);
-	}
+    return tagHandler.getTags();
+  }
 
-	/**
-	 * Write image metadata in a specific format.
-	 *
-	 * @param image Image.
-	 * @param format Specified format.
-	 * @param tags Tags to write.
-	 * @throws IOException If an error occurs during write operation.
-	 */
-	public void setImageMeta(File image, Format format, Map<? extends Tag, String> tags) throws IOException {
-		requireNonNull(format, "Format cannot be null.");
-		ExifToolOptions options = StandardOptions.builder().withFormat(format).build();
-		setImageMeta(image, options, tags);
-	}
+  /**
+   * Write image metadata.
+   * Default format is numeric.
+   *
+   * @param image Image.
+   * @param tags Tags to write.
+   * @throws IOException If an error occurs during write operation.
+   */
+  public void setImageMeta(File image, Map<? extends Tag, String> tags) throws IOException {
+    setImageMeta(image, StandardFormat.NUMERIC, tags);
+  }
 
-	/**
-	 * Write image metadata in a specific format.
-	 *
-	 * @param image Image.
-	 * @param options ExifTool options.
-	 * @param tags Tags to write.
-	 * @throws IOException If an error occurs during write operation.
-	 */
-	public void setImageMeta(File image, ExifToolOptions options, Map<? extends Tag, String> tags) throws IOException {
-		requireNonNull(image, "Image cannot be null and must be a valid stream of image data.");
-		requireNonNull(options, "Options cannot be null.");
-		notEmpty(tags, "Tags cannot be null and must contain 1 or more Tag to query the image for.");
-		isWritable(image, String.format("Unable to read the given image [%s], ensure that the image exists at the given withPath and that the executing Java process has permissions to read it.", image));
+  /**
+   * Write image metadata in a specific format.
+   *
+   * @param image Image.
+   * @param format Specified format.
+   * @param tags Tags to write.
+   * @throws IOException If an error occurs during write operation.
+   */
+  public void setImageMeta(File image, Format format, Map<? extends Tag, String> tags) throws IOException {
+    requireNonNull(format, "Format cannot be null.");
+    ExifToolOptions options = StandardOptions.builder().withFormat(format).build();
+    setImageMeta(image, options, tags);
+  }
 
-		log.debug("Writing {} tags to image: {}", tags.size(), image);
+  /**
+   * Write image metadata in a specific format.
+   *
+   * @param image Image.
+   * @param options ExifTool options.
+   * @param tags Tags to write.
+   * @throws IOException If an error occurs during write operation.
+   */
+  public void setImageMeta(File image, ExifToolOptions options, Map<? extends Tag, String> tags) throws IOException {
+    requireNonNull(image, "Image cannot be null and must be a valid stream of image data.");
+    requireNonNull(options, OPTIONS_CANNOT_BE_NULL);
+    notEmpty(tags, "Tags cannot be null and must contain 1 or more Tag to query the image for.");
+    isWritable(image, String.format("Unable to read the given image [%s], ensure that the image exists at the given withPath and that the executing Java process has permissions to read it.", image));
 
-		long startTime = System.currentTimeMillis();
+    log.debug("Writing {} tags to image: {}", tags.size(), image);
 
-		// Get arguments
-		List<String> args = toArguments(image, tags, options);
+    long startTime = System.currentTimeMillis();
 
-		// Execute ExifTool command
-		strategy.execute(executor, path, args, stopHandler());
+    // Get arguments
+    List<String> args = toArguments(image, tags, options);
 
-		log.debug("Image Meta Processed in {} ms [write {} tags]", System.currentTimeMillis() - startTime, tags.size());
-	}
+    // Execute ExifTool command
+    strategy.execute(executor, path, args, stopHandler());
 
-	private List<String> toArguments(File image, Collection<? extends Tag> tags, ExifToolOptions options) {
-		List<String> tagArgs = new ArrayList<>(tags.size());
-		for (Tag tag : tags) {
-			tagArgs.add("-" + tag.getName());
-		}
+    log.debug("Image Meta Processed in {} ms [write {} tags]", System.currentTimeMillis() - startTime, tags.size());
+  }
 
-		return toArguments(image, options, tagArgs);
-	}
+  private List<String> toArguments(File image, Collection<? extends Tag> tags, ExifToolOptions options) {
+    List<String> tagArgs = new ArrayList<>(tags.size());
+    for (Tag tag : tags) {
+      tagArgs.add("-" + tag.getName());
+    }
 
-	private List<String> toArguments(File image, Map<? extends Tag, String> tags, ExifToolOptions options) {
-		List<String> tagArgs = new ArrayList<>(tags.size());
-		for (Map.Entry<? extends Tag, String> entry : tags.entrySet()) {
-			tagArgs.add("-" + entry.getKey().getName() + "=" + entry.getValue());
-		}
+    return toArguments(image, options, tagArgs);
+  }
 
-		return toArguments(image, options, tagArgs);
-	}
+  private List<String> toArguments(File image, Map<? extends Tag, String> tags, ExifToolOptions options) {
+    List<String> tagArgs = new ArrayList<>(tags.size());
+    for (Map.Entry<? extends Tag, String> entry : tags.entrySet()) {
+      tagArgs.add("-" + entry.getKey().getName() + "=" + entry.getValue());
+    }
 
-	private List<String> toArguments(File image, ExifToolOptions options, List<String> tags) {
-		Collection<String> optionArgs = toCollection(options.serialize());
-		int expectedSize = optionArgs.size() + tags.size() + 3;
-		List<String> args = new ArrayList<>(expectedSize);
+    return toArguments(image, options, tagArgs);
+  }
 
-		// Options.
-		addAll(args, optionArgs);
+  private List<String> toArguments(File image, ExifToolOptions options, List<String> tags) {
+    Collection<String> optionArgs = toCollection(options.serialize());
+    int expectedSize = optionArgs.size() + tags.size() + 3;
+    List<String> args = new ArrayList<>(expectedSize);
 
-		// Compact output.
-		args.add("-S");
+    // Options.
+    addAll(args, optionArgs);
 
-		// Add tags arguments.
-		args.addAll(tags);
+    // Compact output.
+    args.add("-S");
 
-		// Add image argument.
-		args.add(image.getAbsolutePath());
+    // Add tags arguments.
+    args.addAll(tags);
 
-		// Add last argument.
-		// This argument will only be used by exiftool if stay_open flag has been set.
-		args.add("-execute");
+    // Add image argument.
+    args.add("\"" + image.getAbsolutePath() + "\"");
 
-		return new ArrayList<>(args);
-	}
+    // Add last argument.
+    // This argument will only be used by exiftool if stay_open flag has been set.
+    args.add("-execute");
 
-	private static final class FinalizerTask implements Runnable {
-		private final ExecutionStrategy strategy;
+    return new ArrayList<>(args);
+  }
 
-		private FinalizerTask(ExecutionStrategy strategy) {
-			this.strategy = requireNonNull(strategy, "Execution strategy must not be null");
-		}
+  private static final class FinalizerTask implements Runnable {
+    private final ExecutionStrategy strategy;
 
-		@Override
-		public void run() {
-			try {
-				strategy.shutdown();
-			}
-			catch (Exception ex) {
-				log.warn(ex.getMessage(), ex);
-			}
-		}
-	}
+    private FinalizerTask(ExecutionStrategy strategy) {
+      this.strategy = requireNonNull(strategy, "Execution strategy must not be null");
+    }
+
+    @Override
+    public void run() {
+      try {
+        strategy.shutdown();
+      }
+      catch (Exception ex) {
+        log.warn(ex.getMessage(), ex);
+      }
+    }
+  }
 }
